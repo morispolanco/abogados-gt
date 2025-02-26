@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import sqlite3
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-import os
 import requests
 import json
+from docx import Document
 
 # --- Configuración de la Base de Datos SQLite ---
 DB_FILE = "gestor_legal.db"
@@ -19,6 +17,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS casos 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, cliente TEXT, tipo TEXT, 
                   fecha_inicio TEXT, estado TEXT, username TEXT)''')
+    c.execute("INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)", ("admin", "admin"))
     conn.commit()
     conn.close()
 
@@ -33,25 +32,12 @@ def check_credentials(username, password):
     conn.close()
     return result is not None
 
-def add_user(username, password):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
 # Estado de la sesión
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = None
 
 # --- Configuración de la API Key en secrets ---
-# Crea un archivo .streamlit/secrets.toml con: api_key = "TU_CLAVE_AQUI"
 API_KEY = st.secrets.get("api_key", None)
 if not API_KEY:
     st.error("API Key no configurada. Agrega 'api_key' en .streamlit/secrets.toml")
@@ -73,7 +59,9 @@ def generate_legal_content(prompt):
     }
     response = requests.post(url, headers=headers, data=json.dumps(payload))
     if response.status_code == 200:
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        content = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        content = content.replace("**", "").replace("*", "").replace("#", "").replace("`", "")
+        return content
     else:
         st.error(f"Error en la API: {response.text}")
         return "Contenido no generado debido a un error."
@@ -84,8 +72,8 @@ st.markdown("**Herramienta para abogados en Guatemala**")
 
 if not st.session_state.logged_in:
     st.sidebar.header("Iniciar Sesión")
-    login_username = st.sidebar.text_input("Usuario")
-    login_password = st.sidebar.text_input("Contraseña", type="password")
+    login_username = st.sidebar.text_input("Usuario", value="admin")
+    login_password = st.sidebar.text_input("Contraseña", type="password", value="admin")
     if st.sidebar.button("Iniciar Sesión"):
         if check_credentials(login_username, login_password):
             st.session_state.logged_in = True
@@ -93,15 +81,6 @@ if not st.session_state.logged_in:
             st.success("¡Inicio de sesión exitoso!")
         else:
             st.error("Credenciales incorrectas")
-
-    st.sidebar.header("Registrarse")
-    reg_username = st.sidebar.text_input("Nuevo Usuario")
-    reg_password = st.sidebar.text_input("Nueva Contraseña", type="password")
-    if st.sidebar.button("Registrarse"):
-        if add_user(reg_username, reg_password):
-            st.success("Usuario registrado. Inicia sesión.")
-        else:
-            st.error("El usuario ya existe.")
 else:
     st.sidebar.write(f"Bienvenido, {st.session_state.username}")
     if st.sidebar.button("Cerrar Sesión"):
@@ -155,69 +134,92 @@ else:
 
     with tab3:
         st.header("Generar Documentos")
-        doc_type = st.selectbox("Tipo de Documento", ["Recibo de Honorarios", "Contrato Privado", "Demanda Inicial"])
+        doc_types = [
+            "Recibo de Honorarios", "Contrato Privado", "Contrato de Arrendamiento", "Contrato de Compraventa",
+            "Contrato de Prestación de Servicios", "Contrato de Mutuo", "Contrato de Sociedad", "Poder General",
+            "Escrito de Amparo", "Contrato de Trabajo", "Contrato de Donación", "Contrato de Hipoteca",
+            "Demanda Inicial", "Demanda de Desalojo", "Demanda de Divorcio", "Demanda Laboral por Despido Injustificado",
+            "Demanda Penal por Estafa", "Demanda de Alimentos", "Demanda de Reconocimiento de Unión de Hecho",
+            "Demanda de Nulidad de Contrato", "Demanda de Pago por Cheque sin Fondos", "Demanda de Daños y Perjuicios",
+            "Demanda de Cumplimiento de Contrato", "Demanda de Usucapión"
+        ]
+        doc_type = st.selectbox("Tipo de Documento", doc_types)
 
         if doc_type == "Recibo de Honorarios":
             nombre_cliente = st.text_input("Nombre del Cliente")
             monto = st.number_input("Monto (Q)", min_value=0.0)
             if st.button("Generar Recibo"):
-                pdf_file = f"recibo_{nombre_cliente}_{datetime.now().strftime('%Y%m%d')}.pdf"
-                c = canvas.Canvas(pdf_file, pagesize=letter)
-                c.setFont("Helvetica", 12)
-                c.drawString(100, 750, "Recibo de Honorarios")
-                c.drawString(100, 730, f"Cliente: {nombre_cliente}")
-                c.drawString(100, 710, f"Monto: Q{monto:.2f}")
-                c.drawString(100, 690, f"Fecha: {datetime.now().strftime('%d/%m/%Y')}")
-                c.save()
-                st.success(f"Recibo generado: {pdf_file}")
-                with open(pdf_file, "rb") as file:
-                    st.download_button("Descargar", file, file_name=pdf_file)
+                doc = Document()
+                doc.add_heading("Recibo de Honorarios", 0)
+                doc.add_paragraph(f"Cliente: {nombre_cliente}")
+                doc.add_paragraph(f"Monto: Q{monto:.2f}")
+                doc.add_paragraph(f"Fecha: {datetime.now().strftime('%d/%m/%Y')}")
+                file_name = f"recibo_{nombre_cliente}_{datetime.now().strftime('%Y%m%d')}.docx"
+                doc.save(file_name)
+                st.success(f"Recibo generado: {file_name}")
+                with open(file_name, "rb") as file:
+                    st.download_button("Descargar", file, file_name=file_name)
 
-        elif doc_type == "Contrato Privado":
+        else:
             parte1 = st.text_input("Nombre de la Parte 1 (DPI si aplica)")
             parte2 = st.text_input("Nombre de la Parte 2 (DPI si aplica)")
-            objeto = st.text_area("Objeto del Contrato")
-            monto_contrato = st.number_input("Monto del Contrato (Q)", min_value=0.0)
-            if st.button("Generar Contrato"):
-                prompt = f"Redacta un contrato privado conforme a las leyes de Guatemala entre {parte1} y {parte2}, con el objeto: '{objeto}', por un monto de Q{monto_contrato}. Incluye cláusulas estándar como cumplimiento, resolución y jurisdicción en Guatemala."
-                contenido = generate_legal_content(prompt)
-                pdf_file = f"contrato_{parte1}_{datetime.now().strftime('%Y%m%d')}.pdf"
-                c = canvas.Canvas(pdf_file, pagesize=letter)
-                c.setFont("Helvetica", 12)
-                y = 750
-                for line in contenido.split("\n"):
-                    c.drawString(100, y, line[:80])  # Limita a 80 caracteres por línea
-                    y -= 15
-                    if y < 50:
-                        c.showPage()
-                        y = 750
-                c.save()
-                st.success(f"Contrato generado: {pdf_file}")
-                with open(pdf_file, "rb") as file:
-                    st.download_button("Descargar", file, file_name=pdf_file)
+            if doc_type.startswith("Contrato"):
+                objeto = st.text_area("Objeto del Contrato")
+                monto_contrato = st.number_input("Monto del Contrato (Q)", min_value=0.0)
+            elif doc_type == "Poder General":
+                objeto = "Otorgamiento de poder general a favor de la Parte 2"
+                monto_contrato = 0.0
+            elif doc_type == "Escrito de Amparo":
+                motivo = st.text_area("Motivo del Amparo")
+                pretension = st.text_input("Pretensión")
+            elif doc_type.startswith("Demanda"):
+                motivo = st.text_area("Motivo de la Demanda")
+                pretension = st.text_input("Pretensión")
 
-        elif doc_type == "Demanda Inicial":
-            demandante = st.text_input("Nombre del Demandante (DPI si aplica)")
-            demandado = st.text_input("Nombre del Demandado (DPI si aplica)")
-            motivo = st.text_area("Motivo de la Demanda")
-            pretension = st.text_input("Pretensión (lo que se solicita)")
-            if st.button("Generar Demanda"):
-                prompt = f"Redacta una demanda inicial conforme al Código Procesal Civil y Mercantil de Guatemala. Demandante: {demandante}, Demandado: {demandado}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal y referencia a leyes guatemaltecas."
+            if st.button(f"Generar {doc_type}"):
+                doc = Document()
+                doc.add_heading(doc_type, 0)
+                doc.add_paragraph(f"Parte 1: {parte1}")
+                doc.add_paragraph(f"Parte 2: {parte2}")
+
+                if doc_type == "Escrito de Amparo":
+                    prompt = f"Redacta un escrito de amparo conforme a la Ley de Amparo de Guatemala. Recurrente: {parte1}, Autoridad: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal."
+                elif doc_type == "Demanda Inicial":
+                    prompt = f"Redacta una demanda inicial genérica conforme al Código Procesal Civil y Mercantil de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal y referencia a leyes guatemaltecas."
+                elif doc_type == "Demanda de Desalojo":
+                    prompt = f"Redacta una demanda de desalojo conforme al Código Civil de Guatemala. Demandante (arrendador): {parte1}, Demandado (arrendatario): {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye referencia a leyes aplicables."
+                elif doc_type == "Demanda de Divorcio":
+                    prompt = f"Redacta una demanda de divorcio conforme al Código Civil de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal."
+                elif doc_type == "Demanda Laboral por Despido Injustificado":
+                    prompt = f"Redacta una demanda laboral por despido injustificado conforme al Código de Trabajo de Guatemala. Demandante (trabajador): {parte1}, Demandado (empleador): {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye referencias legales."
+                elif doc_type == "Demanda Penal por Estafa":
+                    prompt = f"Redacta una demanda penal por estafa conforme al Código Penal de Guatemala. Querellante: {parte1}, Querellado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal."
+                elif doc_type == "Demanda de Alimentos":
+                    prompt = f"Redacta una demanda de alimentos conforme al Código Civil de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye referencias legales."
+                elif doc_type == "Demanda de Reconocimiento de Unión de Hecho":
+                    prompt = f"Redacta una demanda de reconocimiento de unión de hecho conforme al Código Civil de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal."
+                elif doc_type == "Demanda de Nulidad de Contrato":
+                    prompt = f"Redacta una demanda de nulidad de contrato conforme al Código Civil de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye referencias legales."
+                elif doc_type == "Demanda de Pago por Cheque sin Fondos":
+                    prompt = f"Redacta una demanda de pago por cheque sin fondos conforme al Código de Comercio de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal."
+                elif doc_type == "Demanda de Daños y Perjuicios":
+                    prompt = f"Redacta una demanda de daños y perjuicios conforme al Código Civil de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye referencias legales."
+                elif doc_type == "Demanda de Cumplimiento de Contrato":
+                    prompt = f"Redacta una demanda de cumplimiento de contrato conforme al Código Civil de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal."
+                elif doc_type == "Demanda de Usucapión":
+                    prompt = f"Redacta una demanda de usucapión (prescripción adquisitiva) conforme al Código Civil de Guatemala. Demandante: {parte1}, Demandado: {parte2}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye referencias legales."
+                else:
+                    prompt = f"Redacta un {doc_type} conforme a las leyes de Guatemala entre {parte1} y {parte2}, con el objeto: '{objeto}', por un monto de Q{monto_contrato}. Incluye cláusulas estándar como cumplimiento, resolución y jurisdicción en Guatemala."
+
                 contenido = generate_legal_content(prompt)
-                pdf_file = f"demanda_{demandante}_{datetime.now().strftime('%Y%m%d')}.pdf"
-                c = canvas.Canvas(pdf_file, pagesize=letter)
-                c.setFont("Helvetica", 12)
-                y = 750
-                for line in contenido.split("\n"):
-                    c.drawString(100, y, line[:80])
-                    y -= 15
-                    if y < 50:
-                        c.showPage()
-                        y = 750
-                c.save()
-                st.success(f"Demanda generada: {pdf_file}")
-                with open(pdf_file, "rb") as file:
-                    st.download_button("Descargar", file, file_name=pdf_file)
+                doc.add_paragraph(contenido)
+
+                file_name = f"{doc_type.lower().replace(' ', '_')}_{parte1}_{datetime.now().strftime('%Y%m%d')}.docx"
+                doc.save(file_name)
+                st.success(f"Documento generado: {file_name}")
+                with open(file_name, "rb") as file:
+                    st.download_button("Descargar", file, file_name=file_name)
 
 # Instrucciones
 st.sidebar.markdown("**Ejecutar:** `streamlit run app.py`")
+st.sidebar.markdown("**Usuario predeterminado:** admin/admin")
