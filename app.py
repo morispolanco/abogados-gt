@@ -5,6 +5,8 @@ import sqlite3
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 import os
+import requests
+import json
 
 # --- Configuración de la Base de Datos SQLite ---
 DB_FILE = "gestor_legal.db"
@@ -20,7 +22,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Inicializar la base de datos
 init_db()
 
 # --- Autenticación ---
@@ -48,6 +49,34 @@ def add_user(username, password):
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = None
+
+# --- Configuración de la API Key en secrets ---
+# Crea un archivo .streamlit/secrets.toml con: api_key = "TU_CLAVE_AQUI"
+API_KEY = st.secrets.get("api_key", None)
+if not API_KEY:
+    st.error("API Key no configurada. Agrega 'api_key' en .streamlit/secrets.toml")
+    st.stop()
+
+# --- Función para llamar a la API de Google Gemini ---
+def generate_legal_content(prompt):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 1,
+            "topK": 40,
+            "topP": 0.95,
+            "maxOutputTokens": 8192,
+            "responseMimeType": "text/plain"
+        }
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(payload))
+    if response.status_code == 200:
+        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    else:
+        st.error(f"Error en la API: {response.text}")
+        return "Contenido no generado debido a un error."
 
 # --- Interfaz Principal ---
 st.title("Gestor Legal GT")
@@ -80,14 +109,12 @@ else:
         st.session_state.username = None
         st.experimental_rerun()
 
-    # --- Secciones en Tabs y Columnas ---
+    # --- Tabs ---
     tab1, tab2, tab3 = st.tabs(["Gestión de Casos", "Cálculo de Honorarios", "Documentos"])
 
-    # --- Tab 1: Gestión de Casos ---
     with tab1:
         st.header("Gestión de Casos")
         col1, col2 = st.columns(2)
-
         with col1:
             with st.form(key="nuevo_caso"):
                 cliente = st.text_input("Nombre del Cliente")
@@ -95,7 +122,6 @@ else:
                 fecha_inicio = st.date_input("Fecha de Inicio", datetime.today())
                 estado = st.selectbox("Estado", ["En Progreso", "Ganado", "Perdido"])
                 submit_button = st.form_submit_button(label="Agregar Caso")
-
                 if submit_button:
                     conn = sqlite3.connect(DB_FILE)
                     c = conn.cursor()
@@ -104,7 +130,6 @@ else:
                     conn.commit()
                     conn.close()
                     st.success("Caso agregado con éxito")
-
         with col2:
             st.subheader("Lista de Casos")
             conn = sqlite3.connect(DB_FILE)
@@ -112,11 +137,6 @@ else:
             conn.close()
             st.dataframe(casos_df.drop(columns=["username"]))
 
-            st.subheader("Resumen")
-            estado_counts = casos_df["estado"].value_counts()
-            st.bar_chart(estado_counts)
-
-    # --- Tab 2: Cálculo de Honorarios ---
     with tab2:
         st.header("Cálculo de Honorarios")
         col1, col2 = st.columns(2)
@@ -133,12 +153,11 @@ else:
                 st.write(f"IVA (12%): Q{iva:.2f}")
             st.write(f"**Total: Q{total:.2f}**")
 
-    # --- Tab 3: Generador de Documentos ---
     with tab3:
         st.header("Generar Documentos")
-        doc_type = st.selectbox("Tipo de Documento", ["Recibo", "Contrato Básico", "Demanda"])
-        
-        if doc_type == "Recibo":
+        doc_type = st.selectbox("Tipo de Documento", ["Recibo de Honorarios", "Contrato Privado", "Demanda Inicial"])
+
+        if doc_type == "Recibo de Honorarios":
             nombre_cliente = st.text_input("Nombre del Cliente")
             monto = st.number_input("Monto (Q)", min_value=0.0)
             if st.button("Generar Recibo"):
@@ -154,37 +173,47 @@ else:
                 with open(pdf_file, "rb") as file:
                     st.download_button("Descargar", file, file_name=pdf_file)
 
-        elif doc_type == "Contrato Básico":
-            cliente = st.text_input("Nombre del Cliente (Contrato)")
+        elif doc_type == "Contrato Privado":
+            parte1 = st.text_input("Nombre de la Parte 1 (DPI si aplica)")
+            parte2 = st.text_input("Nombre de la Parte 2 (DPI si aplica)")
             objeto = st.text_area("Objeto del Contrato")
             monto_contrato = st.number_input("Monto del Contrato (Q)", min_value=0.0)
             if st.button("Generar Contrato"):
-                pdf_file = f"contrato_{cliente}_{datetime.now().strftime('%Y%m%d')}.pdf"
+                prompt = f"Redacta un contrato privado conforme a las leyes de Guatemala entre {parte1} y {parte2}, con el objeto: '{objeto}', por un monto de Q{monto_contrato}. Incluye cláusulas estándar como cumplimiento, resolución y jurisdicción en Guatemala."
+                contenido = generate_legal_content(prompt)
+                pdf_file = f"contrato_{parte1}_{datetime.now().strftime('%Y%m%d')}.pdf"
                 c = canvas.Canvas(pdf_file, pagesize=letter)
                 c.setFont("Helvetica", 12)
-                c.drawString(100, 750, "Contrato Básico")
-                c.drawString(100, 730, f"Cliente: {cliente}")
-                c.drawString(100, 710, f"Objeto: {objeto}")
-                c.drawString(100, 690, f"Monto: Q{monto_contrato:.2f}")
-                c.drawString(100, 670, f"Fecha: {datetime.now().strftime('%d/%m/%Y')}")
+                y = 750
+                for line in contenido.split("\n"):
+                    c.drawString(100, y, line[:80])  # Limita a 80 caracteres por línea
+                    y -= 15
+                    if y < 50:
+                        c.showPage()
+                        y = 750
                 c.save()
                 st.success(f"Contrato generado: {pdf_file}")
                 with open(pdf_file, "rb") as file:
                     st.download_button("Descargar", file, file_name=pdf_file)
 
-        elif doc_type == "Demanda":
-            demandante = st.text_input("Nombre del Demandante")
-            demandado = st.text_input("Nombre del Demandado")
+        elif doc_type == "Demanda Inicial":
+            demandante = st.text_input("Nombre del Demandante (DPI si aplica)")
+            demandado = st.text_input("Nombre del Demandado (DPI si aplica)")
             motivo = st.text_area("Motivo de la Demanda")
+            pretension = st.text_input("Pretensión (lo que se solicita)")
             if st.button("Generar Demanda"):
+                prompt = f"Redacta una demanda inicial conforme al Código Procesal Civil y Mercantil de Guatemala. Demandante: {demandante}, Demandado: {demandado}, Motivo: '{motivo}', Pretensión: '{pretension}'. Incluye estructura formal y referencia a leyes guatemaltecas."
+                contenido = generate_legal_content(prompt)
                 pdf_file = f"demanda_{demandante}_{datetime.now().strftime('%Y%m%d')}.pdf"
                 c = canvas.Canvas(pdf_file, pagesize=letter)
                 c.setFont("Helvetica", 12)
-                c.drawString(100, 750, "Escrito de Demanda")
-                c.drawString(100, 730, f"Demandante: {demandante}")
-                c.drawString(100, 710, f"Demandado: {demandado}")
-                c.drawString(100, 690, f"Motivo: {motivo}")
-                c.drawString(100, 670, f"Fecha: {datetime.now().strftime('%d/%m/%Y')}")
+                y = 750
+                for line in contenido.split("\n"):
+                    c.drawString(100, y, line[:80])
+                    y -= 15
+                    if y < 50:
+                        c.showPage()
+                        y = 750
                 c.save()
                 st.success(f"Demanda generada: {pdf_file}")
                 with open(pdf_file, "rb") as file:
