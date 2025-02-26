@@ -7,7 +7,7 @@ import json
 from docx import Document
 
 # Configuración inicial para modo ancho
-st.set_page_config(layout="wide", page_title="Gestor Legal GT")
+st.set_page_config(page_title="Gestor Legal GT")
 
 # --- Configuración de la Base de Datos SQLite ---
 DB_FILE = "gestor_legal.db"
@@ -61,7 +61,7 @@ st.sidebar.markdown("""
 - **Calcular honorarios**: Obtén tarifas precisas en segundos, con o sin IVA.
 - **Generar documentos**: Crea demandas, contratos y recibos ajustados a las leyes guatemaltecas, listos para descargar en Word.
 
-Todo por una licencia única de $1000. ¡Optimiza tu práctica legal hoy!
+Todo por una licencia única de $500. ¡Optimiza tu práctica legal hoy!
 """)
 
 # --- Interfaz Principal ---
