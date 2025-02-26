@@ -6,6 +6,9 @@ import requests
 import json
 from docx import Document
 
+# Configuración inicial para modo ancho
+st.set_page_config(layout="wide", page_title="Gestor Legal GT")
+
 # --- Configuración de la Base de Datos SQLite ---
 DB_FILE = "gestor_legal.db"
 
